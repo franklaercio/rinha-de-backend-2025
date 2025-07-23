@@ -1,0 +1,86 @@
+package payments
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"time"
+)
+
+type Service interface {
+	CreatePayment(input CreatePaymentInput) error
+}
+
+type service struct {
+	apiURL     string
+	httpClient *http.Client
+}
+
+type CreatePaymentInput struct {
+	CorrelationID string  `json:"correlationId"`
+	Amount        float64 `json:"amount"`
+}
+
+func NewService(apiURL string) Service {
+	return &service{
+		apiURL:     apiURL,
+		httpClient: &http.Client{Timeout: 10 * time.Second},
+	}
+}
+
+func (s *service) CreatePayment(input CreatePaymentInput) error {
+	if input.Amount <= 0 {
+		return errors.New("amount must be greater than zero")
+	}
+
+	payment := Payment{
+		CorrelationID: input.CorrelationID,
+		Amount:        input.Amount,
+		RequestedAt:   time.Now().UTC(),
+	}
+
+	go func(p Payment) {
+		if err := s.sendToPaymentProcessorDefault(p); err != nil {
+			log.Printf("erro ao enviar para external API: %v", err)
+		}
+	}(payment)
+
+	return nil
+}
+
+func (s *service) sendToPaymentProcessorDefault(p Payment) error {
+	payload := map[string]interface{}{
+		"correlationId": p.CorrelationID,
+		"amount":        p.Amount,
+		"requestedAt":   p.RequestedAt.Format(time.RFC3339Nano),
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("erro ao serializar JSON: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", s.apiURL+"/payments", bytes.NewBuffer(body))
+	if err != nil {
+		return fmt.Errorf("erro ao criar requisição: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("erro ao executar requisição: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API error: %s", respBody)
+	}
+
+	return nil
+}
