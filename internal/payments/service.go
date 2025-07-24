@@ -3,7 +3,6 @@ package payments
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -18,6 +17,7 @@ type Service interface {
 type service struct {
 	apiURL     string
 	httpClient *http.Client
+	queue      chan Payment
 }
 
 type CreatePaymentInput struct {
@@ -26,15 +26,20 @@ type CreatePaymentInput struct {
 }
 
 func NewService(apiURL string) Service {
-	return &service{
+	s := &service{
 		apiURL:     apiURL,
-		httpClient: &http.Client{Timeout: 10 * time.Second},
+		httpClient: &http.Client{Timeout: 5 * time.Second},
+		queue:      make(chan Payment, 5000),
 	}
+
+	go s.startWorker()
+
+	return s
 }
 
 func (s *service) CreatePayment(input CreatePaymentInput) error {
 	if input.Amount <= 0 {
-		return errors.New("amount must be greater than zero")
+		return fmt.Errorf("amount must be greater than zero")
 	}
 
 	payment := Payment{
@@ -43,13 +48,38 @@ func (s *service) CreatePayment(input CreatePaymentInput) error {
 		RequestedAt:   time.Now().UTC(),
 	}
 
-	go func(p Payment) {
-		if err := s.sendToPaymentProcessorDefault(p); err != nil {
-			log.Printf("erro ao enviar para external API: %v", err)
-		}
-	}(payment)
+	select {
+	case s.queue <- payment:
+		log.Printf("Pagamento enfileirado: %s", payment.CorrelationID)
+	default:
+		log.Printf("Fila cheia, pagamento descartado: %s", payment.CorrelationID)
+	}
 
 	return nil
+}
+
+func (s *service) startWorker() {
+	for payment := range s.queue {
+		retries := 0
+		for {
+			err := s.sendToPaymentProcessorDefault(payment)
+			if err == nil {
+				log.Printf("Pagamento enviado com sucesso: %s", payment.CorrelationID)
+				break
+			}
+
+			log.Printf("Erro ao enviar pagamento %s: %v", payment.CorrelationID, err)
+
+			retries++
+			if retries > 5 {
+				log.Printf("Falha permanente após %d tentativas: %s", retries, payment.CorrelationID)
+				break
+			}
+
+			backoff := time.Duration(retries*2) * time.Second
+			time.Sleep(backoff)
+		}
+	}
 }
 
 func (s *service) sendToPaymentProcessorDefault(p Payment) error {
@@ -73,7 +103,7 @@ func (s *service) sendToPaymentProcessorDefault(p Payment) error {
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("erro ao executar requisição: %w", err)
+		return fmt.Errorf("erro na requisição: %w", err)
 	}
 	defer resp.Body.Close()
 

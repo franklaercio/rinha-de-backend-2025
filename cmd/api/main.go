@@ -17,8 +17,8 @@ func main() {
 
 	mux.Handle("/payments", paymentHandler)
 
-	log.Println("Starting server at :8080")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	log.Println("Starting server at :9999")
+	if err := http.ListenAndServe(":9999", mux); err != nil {
 		log.Fatalf("Could not start server: %v", err)
 	}
 }
