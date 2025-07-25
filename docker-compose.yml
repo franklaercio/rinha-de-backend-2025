@@ -13,33 +13,34 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
 
-  redis:
-    image: redis:7
-    container_name: redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
+#  redis:
+#    image: redis:7
+#    container_name: redis
+#    restart: unless-stopped
+#    ports:
+#      - "6379:6379"
+#    volumes:
+#      - redis_data:/data
 
-  api:
-   build:
-     context: .
-     dockerfile: Dockerfile
-   container_name: api
-   depends_on:
-     - postgres
-     - redis
-   ports:
-     - "8080:8080"
-   environment:
-     DB_HOST: postgres
-     DB_USER: postgres
-     DB_PASSWORD: postgres
-     DB_NAME: rinha
-     REDIS_HOST: redis
+#  api:
+#   build:
+#     context: .
+#     dockerfile: Dockerfile
+#   container_name: api
+#   depends_on:
+#     - postgres
+#     - redis
+#   ports:
+#     - "8080:8080"
+#   environment:
+#     DB_HOST: postgres
+#     DB_USER: postgres
+#     DB_PASSWORD: postgres
+#     DB_NAME: rinha
+#     REDIS_HOST: redis
 
 volumes:
   postgres_data:
-  redis_data:
+#  redis_data:
