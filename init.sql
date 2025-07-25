@@ -5,3 +5,5 @@ CREATE TABLE payments (
   origin INT NOT NULL,
   requested_at TIMESTAMPTZ NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_payments_requested_at_origin ON payments (requested_at, origin);

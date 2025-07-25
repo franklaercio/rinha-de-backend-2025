@@ -5,6 +5,8 @@ services:
     image: postgres:15
     container_name: db
     restart: unless-stopped
+    networks:
+      - backend
     environment:
       POSTGRES_DB: rinha
       POSTGRES_USER: postgres
@@ -14,33 +16,118 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rinha"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.10"
+          memory: "150MB"
 
-#  redis:
-#    image: redis:7
-#    container_name: redis
-#    restart: unless-stopped
-#    ports:
-#      - "6379:6379"
-#    volumes:
-#      - redis_data:/data
+  rabbitmq:
+    image: arm64v8/rabbitmq:3-alpine
+    container_name: rabbitmq
+    networks:
+      - backend
+    ports:
+      - "5672:5672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "check_running", "-q" ]
+      interval: 1s
+      timeout: 1s
+      retries: 50
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "150MB"
 
-#  api:
-#   build:
-#     context: .
-#     dockerfile: Dockerfile
-#   container_name: api
-#   depends_on:
-#     - postgres
-#     - redis
-#   ports:
-#     - "8080:8080"
-#   environment:
-#     DB_HOST: postgres
-#     DB_USER: postgres
-#     DB_PASSWORD: postgres
-#     DB_NAME: rinha
-#     REDIS_HOST: redis
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: ngnix_load_balancer
+    networks:
+      - backend
+    ports:
+      - "9999:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api1
+      - api2
+    deploy:
+      resources:
+        limits:
+          cpus: "0.10"
+          memory: "10MB"
+
+  api1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - backend
+      - payment-processor
+    environment:
+      DB_HOST: postgres
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: rinha
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+      HTTP_PORT: "9999"
+      PAYMENT_WORKERS: "40"
+      PAYMENT_URL_DEFAULT: "http://payment-processor-default:8080"
+      PAYMENT_URL_FALLBACK: "http://payment-processor-fallback:8080"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.15"
+          memory: "20MB"
+
+
+  api2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - backend
+      - payment-processor
+    environment:
+      DB_HOST: postgres
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: rinha
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+      HTTP_PORT: "9999"
+      PAYMENT_WORKERS: "40"
+      PAYMENT_URL_DEFAULT: "http://payment-processor-default:8080"
+      PAYMENT_URL_FALLBACK: "http://payment-processor-fallback:8080"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.15"
+          memory: "20MB"
 
 volumes:
   postgres_data:
-#  redis_data:
+
+networks:
+  backend:
+    driver: bridge
+  payment-processor:
+    external: true

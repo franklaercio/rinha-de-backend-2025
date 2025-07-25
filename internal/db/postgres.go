@@ -31,6 +31,11 @@ func NewPostgresRepository(dsn string) (*PostgresRepository, error) {
 		return nil, fmt.Errorf("could not connect to postgres: %w", err)
 	}
 
+	db.SetMaxOpenConns(180)
+	db.SetMaxIdleConns(180)
+	db.SetConnMaxLifetime(5 * time.Minute)
+	db.SetConnMaxIdleTime(1 * time.Minute)
+
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("could not ping postgres: %w", err)
 	}
@@ -39,23 +44,16 @@ func NewPostgresRepository(dsn string) (*PostgresRepository, error) {
 }
 
 func (r *PostgresRepository) SavePayment(p domain.Payment, origin domain.PaymentProcessor) (string, error) {
-	payment := Payment{
-		CorrelationID: p.CorrelationID,
-		Amount:        p.Amount,
-		Origin:        origin,
-		RequestedAt:   time.Now(),
-	}
-
 	query := `
     	INSERT INTO payments (correlation_id, amount, origin, requested_at)
     	VALUES ($1, $2, $3, $4)
    `
 
-	_, err := r.db.Exec(query, payment.CorrelationID, payment.Amount, payment.Origin, payment.RequestedAt)
+	_, err := r.db.Exec(query, p.CorrelationID, p.Amount, origin, p.RequestedAt)
 	if err != nil {
 		return "", fmt.Errorf("could not save payment: %w", err)
 	}
-	return payment.CorrelationID, nil
+	return p.CorrelationID, nil
 }
 
 func (r *PostgresRepository) GetPaymentSummary(ctx context.Context, from, to time.Time) (*domain.PaymentSummaryResponse, error) {
