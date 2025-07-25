@@ -15,14 +15,14 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
 
-#  redis:
-#    image: redis:7
-#    container_name: redis
-#    restart: unless-stopped
-#    ports:
-#      - "6379:6379"
-#    volumes:
-#      - redis_data:/data
+  redis:
+    image: redis:7
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
 
 #  api:
 #   build:
@@ -43,4 +43,4 @@ services:
 
 volumes:
   postgres_data:
-#  redis_data:
+  redis_data:
