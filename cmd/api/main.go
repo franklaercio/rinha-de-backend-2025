@@ -26,7 +26,8 @@ func main() {
 	}
 
 	redisHost := getEnv("REDIS_HOST", "localhost")
-	redisClient, err := cache.NewRedisClient(redisHost, "6379", "")
+	redisPort := getEnv("REDIS_PORT", "6379")
+	redisClient, err := cache.NewRedisClient(redisHost, redisPort, "")
 	if err != nil {
 		log.Fatalf("Failed to connect to Redis: %v", err)
 	}

@@ -31,6 +31,11 @@ func NewPostgresRepository(dsn string) (*PostgresRepository, error) {
 		return nil, fmt.Errorf("could not connect to postgres: %w", err)
 	}
 
+	db.SetMaxOpenConns(85)
+	db.SetMaxIdleConns(85)
+	db.SetConnMaxLifetime(5 * time.Minute)
+	db.SetConnMaxIdleTime(1 * time.Minute)
+
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("could not ping postgres: %w", err)
 	}
