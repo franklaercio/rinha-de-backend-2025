@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"rinha-de-backend-2025/domain"
 	"rinha-de-backend-2025/internal/db"
@@ -27,7 +28,7 @@ type Service interface {
 // --- REFINADO ---
 // Removidos os campos não utilizados: queue, mu, wg.
 type service struct {
-	db                 *db.PostgresRepository
+	db                 *db.RedisRepository
 	redisClient        *redis.Client
 	paymentURLDefault  string
 	paymentURLFallback string
@@ -39,17 +40,25 @@ type CreatePaymentInput struct {
 	Amount        float64 `json:"amount"`
 }
 
-func NewService(workerCount int, db *db.PostgresRepository, redisClient *redis.Client, paymentURLDefault, paymentURLFallback string) Service {
+func NewService(workerCount int, db *db.RedisRepository, redisClient *redis.Client, paymentURLDefault, paymentURLFallback string) Service {
 	s := &service{
-		db:                 db, // Passando o ponteiro diretamente
+		db:                 db,
 		redisClient:        redisClient,
 		paymentURLDefault:  paymentURLDefault,
 		paymentURLFallback: paymentURLFallback,
-		httpClient:         &http.Client{Timeout: 5 * time.Second},
-	}
-
-	if workerCount <= 0 {
-		workerCount = 1
+		httpClient: &http.Client{
+			Transport: &http.Transport{
+				MaxIdleConns:        500,
+				MaxIdleConnsPerHost: 500,
+				IdleConnTimeout:     90 * time.Second,
+				DisableKeepAlives:   false,
+				DialContext: (&net.Dialer{
+					Timeout:   10 * time.Second,
+					KeepAlive: 30 * time.Second,
+				}).DialContext,
+			},
+			Timeout: 10 * time.Second,
+		},
 	}
 
 	log.Printf("Starting %d payment workers...", workerCount)
@@ -61,6 +70,7 @@ func NewService(workerCount int, db *db.PostgresRepository, redisClient *redis.C
 }
 
 func (s *service) CreatePayment(input CreatePaymentInput) error {
+	// ... (this function is correct and remains unchanged)
 	if input.Amount <= 0 {
 		return fmt.Errorf("amount must be greater than zero")
 	}
@@ -108,39 +118,65 @@ func (s *service) startWorker(workerID int) {
 		}
 
 		log.Printf("[Worker %d] Processing payment: %s", workerID, payment.CorrelationID)
-		s.processDequeuedPayment(payment, workerID)
+		s.processPaymentWithRetries(payment, workerID)
 	}
 }
 
-func (s *service) processDequeuedPayment(payment domain.Payment, workerID int) {
-	retries := 0
+func (s *service) processPaymentWithRetries(payment domain.Payment, workerID int) {
+	// Phase 1: Try to process the payment with the Default processor.
+	err := s.tryProcessor(payment, domain.PaymentDefault, workerID)
+
+	// Phase 2: If Default fails, try the Fallback processor.
+	if err != nil {
+		log.Printf("[Worker %d] Default processor failed for %s after all retries. Trying Fallback.", workerID, payment.CorrelationID)
+		err = s.tryProcessor(payment, domain.PaymentFallback, workerID)
+	}
+
+	// Phase 3: If both processors fail, log a fatal error for this payment.
+	if err != nil {
+		log.Printf("[Worker %d] FATAL: Payment %s failed on both Default and Fallback processors. Error: %v. Discarding message.", workerID, payment.CorrelationID, err)
+	}
+}
+
+func (s *service) tryProcessor(p domain.Payment, origin domain.PaymentProcessor, workerID int) error {
+	// --- Step 1: Call the external API with its own retry logic ---
+	apiRetries := 0
+	maxApiRetries := 5
 	for {
-		err := s.sendToPaymentProcessor(payment, domain.PaymentDefault)
+		err := s.callExternalAPI(p, origin)
 		if err == nil {
-			log.Printf("[Worker %d] Payment sent successfully to Default: %s", workerID, payment.CorrelationID)
+			// External API call was successful, break the loop to proceed to DB save.
 			break
 		}
 
-		log.Printf("[Worker %d] Error sending payment %s to Default: %v", workerID, payment.CorrelationID, err)
-		retries++
-		if retries > 5 {
-			log.Printf("[Worker %d] Max retries reached for Default. Trying Fallback for payment %s", workerID, payment.CorrelationID)
-			err := s.sendToPaymentProcessor(payment, domain.PaymentFallback)
-			if err != nil {
-				log.Printf("[Worker %d] FATAL: Payment failed on Fallback as well for %s: %v", workerID, payment.CorrelationID, err)
-			} else {
-				log.Printf("[Worker %d] Payment sent successfully to Fallback: %s", workerID, payment.CorrelationID)
-			}
-			break
+		log.Printf("[Worker %d] Error calling processor %s for payment %s: %v", workerID, origin, p.CorrelationID, err)
+		apiRetries++
+		if apiRetries > maxApiRetries {
+			return fmt.Errorf("max retries reached for external API at %s", origin)
 		}
 
-		backoff := time.Duration(retries*2) * time.Second
-		log.Printf("[Worker %d] Retrying payment %s in %v", workerID, payment.CorrelationID, backoff)
+		backoff := time.Duration(apiRetries*2) * time.Second
+		log.Printf("[Worker %d] Retrying API call for %s in %v", workerID, p.CorrelationID, backoff)
 		time.Sleep(backoff)
 	}
+
+	// --- Step 2: Persist the result to our internal DB with a robust retry loop ---
+	// This loop MUST eventually succeed to maintain consistency.
+	for {
+		_, err := s.db.SavePayment(p, origin)
+		if err == nil {
+			log.Printf("[Worker %d] Payment %s processed via %s and saved to DB.", workerID, p.CorrelationID, origin)
+			return nil // The entire operation for this processor is successful.
+		}
+
+		// If the DB save fails, we are in an inconsistent state.
+		// We MUST retry until it succeeds.
+		log.Printf("[Worker %d] CRITICAL: Failed to save processed payment %s to DB. Error: %v. Retrying in 3s...", workerID, p.CorrelationID, err)
+		time.Sleep(3 * time.Second)
+	}
 }
 
-func (s *service) sendToPaymentProcessor(p domain.Payment, origin domain.PaymentProcessor) error {
+func (s *service) callExternalAPI(p domain.Payment, origin domain.PaymentProcessor) error {
 	payload := map[string]interface{}{
 		"correlationId": p.CorrelationID,
 		"amount":        p.Amount,
@@ -164,7 +200,6 @@ func (s *service) sendToPaymentProcessor(p domain.Payment, origin domain.Payment
 	if err != nil {
 		return fmt.Errorf("erro ao criar requisição: %w", err)
 	}
-
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := s.httpClient.Do(req)
@@ -178,17 +213,11 @@ func (s *service) sendToPaymentProcessor(p domain.Payment, origin domain.Payment
 		return fmt.Errorf("API error: status %d, body: %s", resp.StatusCode, respBody)
 	}
 
-	_, err = s.db.SavePayment(p, origin)
-	if err != nil {
-		log.Printf("CRITICAL: Error saving payment to DB after successful processing: %v", err)
-		return nil
-	}
-	log.Printf("Payment saved successfully to DB: %s", p.CorrelationID)
-
 	return nil
 }
 
 func (s *service) GetPaymentSummary(from, to string) (*domain.PaymentSummaryResponse, error) {
+	// ... (this function is correct and remains unchanged)
 	fromTime, err := time.Parse(time.RFC3339, from)
 	if err != nil {
 		return nil, fmt.Errorf("invalid 'from' date format: %w", err)

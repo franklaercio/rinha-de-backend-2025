@@ -1,30 +1,6 @@
 version: "3.8"
 
 services:
-  postgres:
-    image: postgres:15
-    container_name: db
-    restart: unless-stopped
-    networks:
-      - backend
-    environment:
-      POSTGRES_DB: rinha
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d rinha"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          cpus: "0.50"
-          memory: "180MB"
-
   redis:
     image: redis:7-alpine
     container_name: redis
@@ -41,8 +17,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.40"
-          memory: "60MB"
+          cpus: "0.50" # Redis agora é mais crítico
+          memory: "200MB" # Um pouco mais de memória para os dados
 
   nginx:
     image: nginx:1.25-alpine
@@ -60,15 +36,13 @@ services:
       resources:
         limits:
           cpus: "0.10"
-          memory: "10MB"
+          memory: "20MB"
 
   api1:
     build:
       context: .
       dockerfile: Dockerfile
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
@@ -82,22 +56,20 @@ services:
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
       HTTP_PORT: "9999"
-      PAYMENT_WORKERS: "75"
+      PAYMENT_WORKERS: "100"
       PAYMENT_URL_DEFAULT: "http://payment-processor-default:8080"
       PAYMENT_URL_FALLBACK: "http://payment-processor-fallback:8080"
     deploy:
       resources:
         limits:
           cpus: "0.25"
-          memory: "50M"
+          memory: "70M"
 
   api2:
     build:
       context: .
       dockerfile: Dockerfile
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
@@ -111,14 +83,14 @@ services:
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
       HTTP_PORT: "9999"
-      PAYMENT_WORKERS: "75"
+      PAYMENT_WORKERS: "100"
       PAYMENT_URL_DEFAULT: "http://payment-processor-default:8080"
       PAYMENT_URL_FALLBACK: "http://payment-processor-fallback:8080"
     deploy:
       resources:
         limits:
           cpus: "0.25"
-          memory: "50M"
+          memory: "70M"
 
 volumes:
   postgres_data:

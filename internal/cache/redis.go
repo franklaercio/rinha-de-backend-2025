@@ -12,6 +12,7 @@ func NewRedisClient(host, port, password string) (*redis.Client, error) {
 		Addr:     addr,
 		Password: password,
 		DB:       0,
+		PoolSize: 120,
 	})
 
 	if err := rbd.Ping(context.Background()).Err(); err != nil {
