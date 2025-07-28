@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   postgres:
-    image: postgres:15
+    image: postgres:15-alpine
     container_name: db
     restart: unless-stopped
     networks:
@@ -22,8 +22,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.50"
-          memory: "240MB"
+          cpus: "0.10"
+          memory: "130MB"
 
   redis:
     image: redis:7-alpine
@@ -41,8 +41,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.40"
-          memory: "40MB"
+          cpus: "0.30"
+          memory: "80MB"
 
   nginx:
     image: nginx:1.25-alpine
@@ -82,14 +82,14 @@ services:
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
       HTTP_PORT: "9999"
-      PAYMENT_WORKERS: "80"
+      PAYMENT_WORKERS: "45"
       PAYMENT_URL_DEFAULT: "http://payment-processor-default:8080"
       PAYMENT_URL_FALLBACK: "http://payment-processor-fallback:8080"
     deploy:
       resources:
         limits:
-          cpus: "0.25"
-          memory: "30M"
+          cpus: "0.5"
+          memory: "60M"
 
   api2:
     build:
@@ -111,14 +111,14 @@ services:
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
       HTTP_PORT: "9999"
-      PAYMENT_WORKERS: "80"
+      PAYMENT_WORKERS: "45"
       PAYMENT_URL_DEFAULT: "http://payment-processor-default:8080"
       PAYMENT_URL_FALLBACK: "http://payment-processor-fallback:8080"
     deploy:
       resources:
         limits:
-          cpus: "0.25"
-          memory: "30M"
+          cpus: "0.5"
+          memory: "60M"
 
 volumes:
   postgres_data:

@@ -24,8 +24,6 @@ type Service interface {
 	GetPaymentSummary(from, to string) (*domain.PaymentSummaryResponse, error)
 }
 
-// --- REFINADO ---
-// Removidos os campos não utilizados: queue, mu, wg.
 type service struct {
 	db                 *db.PostgresRepository
 	redisClient        *redis.Client
@@ -37,6 +35,7 @@ type service struct {
 type CreatePaymentInput struct {
 	CorrelationID string  `json:"correlationId"`
 	Amount        float64 `json:"amount"`
+	RequestedAt   time.Time
 }
 
 func NewService(workerCount int, db *db.PostgresRepository, redisClient *redis.Client, paymentURLDefault, paymentURLFallback string) Service {
@@ -89,7 +88,6 @@ func (s *service) CreatePayment(input CreatePaymentInput) error {
 }
 
 func (s *service) startWorker(workerID int) {
-	log.Printf("Payment worker #%d started...", workerID)
 	ctx := context.Background()
 
 	for {

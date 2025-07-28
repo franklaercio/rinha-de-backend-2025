@@ -2,8 +2,8 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"rinha-de-backend-2025/domain"
 	"time"
 )
@@ -18,29 +18,31 @@ type Payment struct {
 
 type Repository interface {
 	SavePayment(p domain.Payment, origin domain.PaymentProcessor) (string, error)
-	GetSummary() (*domain.PaymentSummary, error)
+	GetPaymentSummary(ctx context.Context, from, to time.Time) (*domain.PaymentSummaryResponse, error)
 }
 
 type PostgresRepository struct {
-	db *sql.DB
+	pool *pgxpool.Pool
 }
 
-func NewPostgresRepository(dsn string) (*PostgresRepository, error) {
-	db, err := sql.Open("postgres", dsn)
+func NewPostgresRepository(ctx context.Context, dsn string, maxConnections int) (*PostgresRepository, error) {
+	config, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("could not connect to postgres: %w", err)
+		return nil, fmt.Errorf("invalid db config: %w", err)
 	}
 
-	db.SetMaxOpenConns(85)
-	db.SetMaxIdleConns(85)
-	db.SetConnMaxLifetime(5 * time.Minute)
-	db.SetConnMaxIdleTime(1 * time.Minute)
+	config.MaxConns = int32(maxConnections)
 
-	if err := db.Ping(); err != nil {
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		return nil, fmt.Errorf("could not create pgx pool: %w", err)
+	}
+
+	if err := pool.Ping(ctx); err != nil {
 		return nil, fmt.Errorf("could not ping postgres: %w", err)
 	}
 
-	return &PostgresRepository{db: db}, nil
+	return &PostgresRepository{pool: pool}, nil
 }
 
 func (r *PostgresRepository) SavePayment(p domain.Payment, origin domain.PaymentProcessor) (string, error) {
@@ -48,8 +50,7 @@ func (r *PostgresRepository) SavePayment(p domain.Payment, origin domain.Payment
     	INSERT INTO payments (correlation_id, amount, origin, requested_at)
     	VALUES ($1, $2, $3, $4)
    `
-
-	_, err := r.db.Exec(query, p.CorrelationID, p.Amount, origin, p.RequestedAt)
+	_, err := r.pool.Exec(context.Background(), query, p.CorrelationID, p.Amount, origin, p.RequestedAt)
 	if err != nil {
 		return "", fmt.Errorf("could not save payment: %w", err)
 	}
@@ -64,7 +65,7 @@ func (r *PostgresRepository) GetPaymentSummary(ctx context.Context, from, to tim
 		GROUP BY origin
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, from, to)
+	rows, err := r.pool.Query(ctx, query, from, to)
 	if err != nil {
 		return nil, fmt.Errorf("could not get summary: %w", err)
 	}
@@ -78,7 +79,7 @@ func (r *PostgresRepository) GetPaymentSummary(ctx context.Context, from, to tim
 		var totalAmount float64
 
 		if err := rows.Scan(&origin, &totalRequests, &totalAmount); err != nil {
-			return nil, fmt.Errorf("could not get summary: %w", err)
+			return nil, fmt.Errorf("scan error: %w", err)
 		}
 
 		switch domain.PaymentProcessor(origin) {
