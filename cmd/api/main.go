@@ -6,16 +6,12 @@ import (
 	"net/http"
 	"os"
 	"rinha-de-backend-2025/internal/cache"
-	"rinha-de-backend-2025/internal/db" // Continua usando o pacote db
+	"rinha-de-backend-2025/internal/db"
 	"rinha-de-backend-2025/internal/payments"
 	"strconv"
-	// REMOVA: _ "github.com/lib/pq"
 )
 
 func main() {
-	// --- REMOVIDA: Lógica de conexão com o Postgres ---
-
-	// A conexão com o Redis agora é usada para o repositório e a fila
 	redisHost := getEnv("REDIS_HOST", "localhost")
 	redisPort := getEnv("REDIS_PORT", "6379")
 	redisClient, err := cache.NewRedisClient(redisHost, redisPort, "")
@@ -23,7 +19,6 @@ func main() {
 		log.Fatalf("Failed to connect to Redis: %v", err)
 	}
 
-	// --- ADICIONADO: Criação do repositório Redis ---
 	repo := db.NewRedisRepository(redisClient)
 
 	paymentURLDefault := getEnv("PAYMENT_URL_DEFAULT", "http://localhost:8001")
@@ -36,7 +31,6 @@ func main() {
 		workerCount = 50
 	}
 
-	// O service agora recebe o RedisRepository, que satisfaz a mesma interface
 	service := payments.NewService(workerCount, repo, redisClient, paymentURLDefault, paymentURLFallback)
 	paymentHandler := payments.NewHandler(service)
 

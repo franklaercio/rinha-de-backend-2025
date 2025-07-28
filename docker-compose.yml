@@ -17,8 +17,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.50" # Redis agora é mais crítico
-          memory: "200MB" # Um pouco mais de memória para os dados
+          cpus: "0.40"
+          memory: "80MB"
 
   nginx:
     image: nginx:1.25-alpine
@@ -62,8 +62,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.25"
-          memory: "70M"
+          cpus: "0.5"
+          memory: "125M"
 
   api2:
     build:
@@ -89,8 +89,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.25"
-          memory: "70M"
+          cpus: "0.5"
+          memory: "125M"
 
 volumes:
   postgres_data:

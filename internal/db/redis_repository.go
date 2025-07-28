@@ -1,10 +1,11 @@
-// internal/db/redis_repository.go
 package db
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"rinha-de-backend-2025/domain"
 	"strconv"
 	"time"
@@ -12,24 +13,18 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// RedisRepository implementa a persistência usando Redis.
 type RedisRepository struct {
 	client *redis.Client
 }
 
-// NewRedisRepository cria uma instância do repositório Redis.
 func NewRedisRepository(client *redis.Client) *RedisRepository {
 	return &RedisRepository{client: client}
 }
 
-// SavePayment salva o pagamento e atualiza os contadores do sumário atomicamente.
 func (r *RedisRepository) SavePayment(p domain.Payment, origin domain.PaymentProcessor) (string, error) {
 	ctx := context.Background()
-
-	// Usamos um Pipeline para garantir que as operações sejam enviadas ao Redis de uma só vez.
 	pipe := r.client.Pipeline()
 
-	// 1. Salvar os detalhes do pagamento como um JSON em um Hash (para auditoria)
 	paymentKey := fmt.Sprintf("payment:%s", p.CorrelationID)
 	paymentData, err := json.Marshal(p)
 	if err != nil {
@@ -38,13 +33,12 @@ func (r *RedisRepository) SavePayment(p domain.Payment, origin domain.PaymentPro
 	pipe.HSet(ctx, paymentKey, "data", paymentData)
 	pipe.HSet(ctx, paymentKey, "origin", int(origin))
 
-	// 2. Atualizar os contadores do sumário de forma atômica
-	summaryKey := fmt.Sprintf("summary:%d", origin)
+	dateStr := p.RequestedAt.Format("2006-01-02")
+	summaryKey := fmt.Sprintf("summary:%d:%s", origin, dateStr)
+
 	pipe.HIncrBy(ctx, summaryKey, "total_requests", 1)
-	// Para o valor, usamos INCRBYFLOAT para manter a precisão.
 	pipe.HIncrByFloat(ctx, summaryKey, "total_amount", p.Amount)
 
-	// Executa o pipeline
 	_, err = pipe.Exec(ctx)
 	if err != nil {
 		return "", fmt.Errorf("could not execute redis pipeline for save: %w", err)
@@ -53,31 +47,35 @@ func (r *RedisRepository) SavePayment(p domain.Payment, origin domain.PaymentPro
 	return p.CorrelationID, nil
 }
 
-// GetPaymentSummary lê os contadores pré-agregados do Redis. É extremamente rápido.
 func (r *RedisRepository) GetPaymentSummary(ctx context.Context, from, to time.Time) (*domain.PaymentSummaryResponse, error) {
 	summary := &domain.PaymentSummaryResponse{}
 	origins := []domain.PaymentProcessor{domain.PaymentDefault, domain.PaymentFallback}
 
 	for _, origin := range origins {
-		summaryKey := fmt.Sprintf("summary:%d", origin)
+		var totalRequests int
+		var totalAmount float64
 
-		// Pega todos os campos do hash de uma vez
-		data, err := r.client.HGetAll(ctx, summaryKey).Result()
-		if err != nil {
-			// Se a chave não existir, não é um erro, apenas significa 0.
-			if err == redis.Nil {
-				continue
+		for date := from; !date.After(to); date = date.AddDate(0, 0, 1) {
+			summaryKey := fmt.Sprintf("summary:%d:%s", origin, date.Format("2006-01-02"))
+
+			data, err := r.client.HGetAll(ctx, summaryKey).Result()
+			if err != nil {
+				if errors.Is(err, redis.Nil) {
+					continue
+				}
+				return nil, fmt.Errorf("could not get summary for origin %d on %s: %w", origin, date.Format("2006-01-02"), err)
 			}
-			return nil, fmt.Errorf("could not get summary for origin %d: %w", origin, err)
-		}
 
-		// Converte os valores de string para os tipos corretos
-		totalRequests, _ := strconv.Atoi(data["total_requests"])
-		totalAmount, _ := strconv.ParseFloat(data["total_amount"], 64)
+			req, _ := strconv.Atoi(data["total_requests"])
+			amt, _ := strconv.ParseFloat(data["total_amount"], 64)
+
+			totalRequests += req
+			totalAmount += amt
+		}
 
 		paymentSummary := domain.PaymentSummary{
 			TotalRequests: totalRequests,
-			TotalAmount:   totalAmount,
+			TotalAmount:   math.Round(totalAmount*10) / 10, // arredonda para 1 casa decimal
 		}
 
 		if origin == domain.PaymentDefault {
