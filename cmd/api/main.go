@@ -5,12 +5,12 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"rinha-de-backend-2025/internal/broker"
 	"rinha-de-backend-2025/internal/db"
 	"rinha-de-backend-2025/internal/payments"
 	"strconv"
 
 	_ "github.com/lib/pq"
+	"github.com/nats-io/nats.go"
 )
 
 func main() {
@@ -24,21 +24,23 @@ func main() {
 
 	repo, err := db.NewPostgresRepository(dsn)
 	if err != nil {
-		log.Fatalf("erro ao conectar ao banco: %v", err)
+		log.Fatalf("Erro ao conectar ao banco: %v", err)
 	}
 
-	rabbitURL := getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
-	rabbitChannel, err := broker.NewRabbitMQChannel(rabbitURL)
+	natsURL := getEnv("NATS_URL", "nats://localhost:4222")
+	nc, err := nats.Connect(natsURL)
 	if err != nil {
-		log.Fatalf("Failed to connect to RabbitMQ: %v", err)
+		log.Fatalf("Erro ao conectar ao NATS: %v", err)
 	}
+	defer nc.Drain()
 
 	paymentURLDefault := getEnv("PAYMENT_URL_DEFAULT", "http://localhost:8001")
 	paymentURLFallback := getEnv("PAYMENT_URL_FALLBACK", "http://localhost:8002")
 	workerCount, _ := strconv.Atoi(getEnv("PAYMENT_WORKERS", "50"))
 	serverPort := getEnv("HTTP_PORT", "9999")
 
-	service := payments.NewService(workerCount, repo, rabbitChannel, paymentURLDefault, paymentURLFallback)
+	// Cria o serviço com NATS
+	service := payments.NewService(workerCount, repo, nc, paymentURLDefault, paymentURLFallback)
 	paymentHandler := payments.NewHandler(service)
 
 	mux := http.NewServeMux()

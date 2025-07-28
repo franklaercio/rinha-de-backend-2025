@@ -5,15 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/rabbitmq/amqp091-go"
+	"github.com/nats-io/nats.go"
 	"io"
 	"log"
 	"net/http"
 	"rinha-de-backend-2025/domain"
-	"rinha-de-backend-2025/internal/broker"
 	"rinha-de-backend-2025/internal/db"
 	"time"
 )
+
+const PaymentSubject = "payments.created"
 
 type Service interface {
 	CreatePayment(input CreatePaymentInput) error
@@ -22,7 +23,7 @@ type Service interface {
 
 type service struct {
 	db                 *db.PostgresRepository
-	rabbitChannel      *amqp091.Channel
+	natsConn           *nats.Conn
 	paymentURLDefault  string
 	paymentURLFallback string
 	httpClient         *http.Client
@@ -33,10 +34,10 @@ type CreatePaymentInput struct {
 	Amount        float64 `json:"amount"`
 }
 
-func NewService(workerCount int, db *db.PostgresRepository, rabbitChannel *amqp091.Channel, paymentURLDefault, paymentURLFallback string) Service {
+func NewService(workerCount int, db *db.PostgresRepository, natsConn *nats.Conn, paymentURLDefault, paymentURLFallback string) Service {
 	s := &service{
 		db:                 db,
-		rabbitChannel:      rabbitChannel,
+		natsConn:           natsConn,
 		paymentURLDefault:  paymentURLDefault,
 		paymentURLFallback: paymentURLFallback,
 		httpClient:         &http.Client{Timeout: 5 * time.Second},
@@ -62,60 +63,34 @@ func (s *service) CreatePayment(input CreatePaymentInput) error {
 
 	paymentJSON, err := json.Marshal(payment)
 	if err != nil {
-		log.Printf("Error marshaling payment: %v", err)
-		return fmt.Errorf("could not process payment: %w", err)
+		return fmt.Errorf("could not marshal payment: %w", err)
 	}
 
-	ctx := context.Background()
-
-	err = s.rabbitChannel.PublishWithContext(ctx,
-		"",
-		broker.PaymentQueueName,
-		false,
-		false,
-		amqp091.Publishing{
-			ContentType:  "application/json",
-			Body:         paymentJSON,
-			DeliveryMode: amqp091.Persistent,
-		})
-
+	err = s.natsConn.Publish(PaymentSubject, paymentJSON)
 	if err != nil {
-		log.Printf("CRITICAL: Failed to publish payment to RabbitMQ. CorrelationID: %s, Error: %v", payment.CorrelationID, err)
-		return fmt.Errorf("erro ao enfileirar pagamento: %w", err)
+		return fmt.Errorf("failed to publish to NATS: %w", err)
 	}
 
-	log.Printf("Payment enqueued to RabbitMQ: %s", payment.CorrelationID)
+	log.Printf("Payment published to NATS: %s", payment.CorrelationID)
 	return nil
 }
 
 func (s *service) startWorker(workerID int) {
-	log.Printf("Payment worker #%d started...", workerID)
+	log.Printf("Worker #%d subscribed to NATS subject '%s'", workerID, PaymentSubject)
 
-	msgs, err := s.rabbitChannel.Consume(
-		broker.PaymentQueueName,
-		fmt.Sprintf("worker-%d", workerID),
-		false,
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
-		log.Fatalf("Worker #%d failed to register a consumer: %v", workerID, err)
-	}
-
-	for d := range msgs {
+	_, err := s.natsConn.Subscribe(PaymentSubject, func(msg *nats.Msg) {
 		var payment domain.Payment
-		if err := json.Unmarshal(d.Body, &payment); err != nil {
-			log.Printf("[Worker %d] Error unmarshaling payment JSON: %v. Discarding message.", workerID, err)
-			d.Nack(false, false) // Rejeita a mensagem, não re-enfileira.
-			continue
+		if err := json.Unmarshal(msg.Data, &payment); err != nil {
+			log.Printf("[Worker %d] Error decoding message: %v", workerID, err)
+			return
 		}
 
 		log.Printf("[Worker %d] Processing payment: %s", workerID, payment.CorrelationID)
 		s.processDequeuedPayment(payment, workerID)
+	})
 
-		d.Ack(false)
+	if err != nil {
+		log.Fatalf("Worker #%d failed to subscribe: %v", workerID, err)
 	}
 }
 
@@ -130,28 +105,33 @@ func (s *service) processDequeuedPayment(payment domain.Payment, workerID int) {
 			return
 		}
 
-		log.Printf("[Worker %d] Error sending payment %s to Default (attempt %d/%d): %v", workerID, payment.CorrelationID, retries+1, maxRetries, err)
+		log.Printf("[Worker %d] Failed to send to Default (try %d/%d): %v", workerID, retries+1, maxRetries, err)
 		retries++
 
 		if retries >= maxRetries {
-			log.Printf("[Worker %d] Max retries reached for Default. Trying Fallback for payment %s", workerID, payment.CorrelationID)
+			log.Printf("[Worker %d] Trying Fallback for %s", workerID, payment.CorrelationID)
 
 			err := s.sendToPaymentProcessor(payment, domain.PaymentFallback)
 			if err != nil {
-				log.Printf("[Worker %d] FATAL: Payment failed on Fallback as well for %s: %v", workerID, payment.CorrelationID, err)
+				log.Printf("[Worker %d] FATAL: Fallback failed for %s: %v", workerID, payment.CorrelationID, err)
 			} else {
-				log.Printf("[Worker %d] Payment sent successfully to Fallback: %s", workerID, payment.CorrelationID)
+				log.Printf("[Worker %d] Payment sent to Fallback: %s", workerID, payment.CorrelationID)
 			}
 			return
 		}
 
-		backoff := time.Duration(retries*2) * time.Second
-		log.Printf("[Worker %d] Retrying payment %s in %v", workerID, payment.CorrelationID, backoff)
+		backoff := time.Duration(retries*1) * time.Second
+		log.Printf("[Worker %d] Retrying in %v", workerID, backoff)
 		time.Sleep(backoff)
 	}
 }
 
 func (s *service) sendToPaymentProcessor(p domain.Payment, origin domain.PaymentProcessor) error {
+	//existPayment, err := s.db.ExistsPaymentByCorrelationID(context.Background(), p.CorrelationID)
+	//if existPayment || err != nil {
+	//	return fmt.Errorf("payment exist %s", p.CorrelationID)
+	//}
+
 	payload := map[string]interface{}{
 		"correlationId": p.CorrelationID,
 		"amount":        p.Amount,
@@ -160,7 +140,7 @@ func (s *service) sendToPaymentProcessor(p domain.Payment, origin domain.Payment
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("erro ao serializar JSON: %w", err)
+		return fmt.Errorf("serialization error: %w", err)
 	}
 
 	var url string
@@ -173,28 +153,28 @@ func (s *service) sendToPaymentProcessor(p domain.Payment, origin domain.Payment
 
 	req, err := http.NewRequest("POST", url+"/payments", bytes.NewBuffer(body))
 	if err != nil {
-		return fmt.Errorf("erro ao criar requisição: %w", err)
+		return fmt.Errorf("request creation error: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("erro na requisição: %w", err)
+		return fmt.Errorf("http request error: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error: status %d, body: %s", resp.StatusCode, string(respBody))
+		return fmt.Errorf("api error %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	_, err = s.db.SavePayment(p, origin)
 	if err != nil {
-		log.Printf("CRITICAL: Error saving payment to DB after successful processing. The message will be ACK'd to prevent double payment. CorrelationID: %s, Error: %v", p.CorrelationID, err)
+		log.Printf("Error saving to DB. CorrelationID: %s. Error: %v", p.CorrelationID, err)
 		return nil
 	}
 
-	log.Printf("Payment saved successfully to DB: %s", p.CorrelationID)
+	log.Printf("Payment saved to DB: %s", p.CorrelationID)
 	return nil
 }
 

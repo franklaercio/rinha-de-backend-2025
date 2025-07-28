@@ -97,3 +97,19 @@ func (r *PostgresRepository) GetPaymentSummary(ctx context.Context, from, to tim
 
 	return &summary, nil
 }
+
+func (r *PostgresRepository) ExistsPaymentByCorrelationID(ctx context.Context, correlationId string) (bool, error) {
+	query := `
+		SELECT count(*) 
+		FROM payments 
+		WHERE correlation_id = $1
+	`
+
+	var count int
+	err := r.db.QueryRowContext(ctx, query, correlationId).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+
+	return count > 0, nil
+}

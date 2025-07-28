@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   postgres:
-    image: postgres:15
+    image: postgres:17
     container_name: db
     restart: unless-stopped
     networks:
@@ -24,29 +24,26 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.10"
-          memory: "150MB"
+          cpus: "0.15"
+          memory: "100MB"
 
-  rabbitmq:
-    image: arm64v8/rabbitmq:3-alpine
-    container_name: rabbitmq
+  nats:
+    image: nats:2.10-alpine
+    container_name: nats
+    ports:
+      - "4222:4222"
     networks:
       - backend
-    ports:
-      - "5672:5672"
-    environment:
-      - RABBITMQ_DEFAULT_USER=guest
-      - RABBITMQ_DEFAULT_PASS=guest
     healthcheck:
-      test: [ "CMD", "rabbitmq-diagnostics", "check_running", "-q" ]
-      interval: 1s
+      test: ["CMD", "nats-server", "-sl"]
+      interval: 2s
       timeout: 1s
-      retries: 50
+      retries: 10
     deploy:
       resources:
         limits:
-          cpus: "1.0"
-          memory: "150MB"
+          cpus: "0.15"
+          memory: "30MB"
 
   nginx:
     image: nginx:1.25-alpine
@@ -73,7 +70,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      rabbitmq:
+      nats:
         condition: service_healthy
     networks:
       - backend
@@ -83,7 +80,7 @@ services:
       DB_USER: postgres
       DB_PASSWORD: postgres
       DB_NAME: rinha
-      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+      NATS_URL: "nats://nats:4222"
       HTTP_PORT: "9999"
       PAYMENT_WORKERS: "40"
       PAYMENT_URL_DEFAULT: "http://payment-processor-default:8080"
@@ -91,9 +88,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.15"
-          memory: "20MB"
-
+          cpus: "0.55"
+          memory: "105MB"
 
   api2:
     build:
@@ -102,7 +98,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      rabbitmq:
+      nats:
         condition: service_healthy
     networks:
       - backend
@@ -112,7 +108,7 @@ services:
       DB_USER: postgres
       DB_PASSWORD: postgres
       DB_NAME: rinha
-      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+      NATS_URL: "nats://nats:4222"
       HTTP_PORT: "9999"
       PAYMENT_WORKERS: "40"
       PAYMENT_URL_DEFAULT: "http://payment-processor-default:8080"
@@ -120,8 +116,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.15"
-          memory: "20MB"
+          cpus: "0.55"
+          memory: "105MB"
 
 volumes:
   postgres_data:
