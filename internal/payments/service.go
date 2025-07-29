@@ -3,15 +3,16 @@ package payments
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"rinha-de-backend-2025/domain"
 	"rinha-de-backend-2025/internal/db"
+	"sync"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -25,11 +26,15 @@ type Service interface {
 }
 
 type service struct {
-	db                 *db.PostgresRepository
-	redisClient        *redis.Client
-	paymentURLDefault  string
-	paymentURLFallback string
-	httpClient         *http.Client
+	db                      *db.PostgresRepository
+	redisClient             *redis.Client
+	paymentURLDefault       string
+	paymentURLFallback      string
+	httpClient              *http.Client
+	lastHealthCheckDefault  time.Time
+	lastHealthCheckFallback time.Time
+	healthCache             map[domain.PaymentProcessor]bool
+	mu                      sync.Mutex
 }
 
 type CreatePaymentInput struct {
@@ -38,13 +43,19 @@ type CreatePaymentInput struct {
 	RequestedAt   time.Time
 }
 
+type HealthCheck struct {
+	Failing         bool
+	MinResponseTime int64
+}
+
 func NewService(workerCount int, db *db.PostgresRepository, redisClient *redis.Client, paymentURLDefault, paymentURLFallback string) Service {
 	s := &service{
-		db:                 db, // Passando o ponteiro diretamente
+		db:                 db,
 		redisClient:        redisClient,
 		paymentURLDefault:  paymentURLDefault,
 		paymentURLFallback: paymentURLFallback,
 		httpClient:         &http.Client{Timeout: 5 * time.Second},
+		healthCache:        make(map[domain.PaymentProcessor]bool),
 	}
 
 	if workerCount <= 0 {
@@ -53,7 +64,7 @@ func NewService(workerCount int, db *db.PostgresRepository, redisClient *redis.C
 
 	log.Printf("Starting %d payment workers...", workerCount)
 	for i := 1; i <= workerCount; i++ {
-		go s.startWorker(i) // Passa um ID para cada worker
+		go s.startWorker(i)
 	}
 
 	return s
@@ -70,7 +81,7 @@ func (s *service) CreatePayment(input CreatePaymentInput) error {
 		RequestedAt:   time.Now().UTC(),
 	}
 
-	paymentJSON, err := json.Marshal(payment)
+	paymentJSON, err := sonic.Marshal(payment)
 	if err != nil {
 		log.Printf("Error marshaling payment: %v", err)
 		return fmt.Errorf("could not process payment: %w", err)
@@ -83,7 +94,6 @@ func (s *service) CreatePayment(input CreatePaymentInput) error {
 	}
 
 	log.Printf("Payment enqueued: %s", payment.CorrelationID)
-
 	return nil
 }
 
@@ -100,7 +110,7 @@ func (s *service) startWorker(workerID int) {
 
 		paymentJSON := result[1]
 		var payment domain.Payment
-		if err := json.Unmarshal([]byte(paymentJSON), &payment); err != nil {
+		if err := sonic.Unmarshal([]byte(paymentJSON), &payment); err != nil {
 			log.Printf("[Worker %d] Error unmarshaling payment JSON: %v. Discarding message.", workerID, err)
 			continue
 		}
@@ -111,31 +121,25 @@ func (s *service) startWorker(workerID int) {
 }
 
 func (s *service) processDequeuedPayment(payment domain.Payment, workerID int) {
-	retries := 0
-	for {
-		err := s.sendToPaymentProcessor(payment, domain.PaymentDefault)
-		if err == nil {
-			log.Printf("[Worker %d] Payment sent successfully to Default: %s", workerID, payment.CorrelationID)
-			break
+	if s.isHealthy(domain.PaymentDefault) {
+		if err := s.sendToPaymentProcessor(payment, domain.PaymentDefault); err == nil {
+			log.Printf("[Worker %d] Payment sent via Default: %s", workerID, payment.CorrelationID)
+			return
 		}
-
-		log.Printf("[Worker %d] Error sending payment %s to Default: %v", workerID, payment.CorrelationID, err)
-		retries++
-		if retries > 5 {
-			log.Printf("[Worker %d] Max retries reached for Default. Trying Fallback for payment %s", workerID, payment.CorrelationID)
-			err := s.sendToPaymentProcessor(payment, domain.PaymentFallback)
-			if err != nil {
-				log.Printf("[Worker %d] FATAL: Payment failed on Fallback as well for %s: %v", workerID, payment.CorrelationID, err)
-			} else {
-				log.Printf("[Worker %d] Payment sent successfully to Fallback: %s", workerID, payment.CorrelationID)
-			}
-			break
-		}
-
-		backoff := time.Duration(retries*2) * time.Second
-		log.Printf("[Worker %d] Retrying payment %s in %v", workerID, payment.CorrelationID, backoff)
-		time.Sleep(backoff)
+		log.Printf("[Worker %d] Default failed for %s", workerID, payment.CorrelationID)
 	}
+
+	if s.isHealthy(domain.PaymentFallback) {
+		if err := s.sendToPaymentProcessor(payment, domain.PaymentFallback); err == nil {
+			log.Printf("[Worker %d] Payment sent via Fallback: %s", workerID, payment.CorrelationID)
+			return
+		}
+		log.Printf("[Worker %d] Fallback failed for %s", workerID, payment.CorrelationID)
+	}
+
+	log.Printf("[Worker %d] Re-enqueueing payment: %s", workerID, payment.CorrelationID)
+	paymentJSON, _ := sonic.Marshal(payment)
+	_ = s.redisClient.LPush(context.Background(), paymentQueueName, paymentJSON).Err()
 }
 
 func (s *service) sendToPaymentProcessor(p domain.Payment, origin domain.PaymentProcessor) error {
@@ -145,7 +149,7 @@ func (s *service) sendToPaymentProcessor(p domain.Payment, origin domain.Payment
 		"requestedAt":   p.RequestedAt.Format(time.RFC3339Nano),
 	}
 
-	body, err := json.Marshal(payload)
+	body, err := sonic.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("erro ao serializar JSON: %w", err)
 	}
@@ -199,4 +203,71 @@ func (s *service) GetPaymentSummary(from, to string) (*domain.PaymentSummaryResp
 
 	ctx := context.Background()
 	return s.db.GetPaymentSummary(ctx, fromTime, toTime)
+}
+
+func (s *service) GetHealthCheck(origin domain.PaymentProcessor) error {
+	var url string
+	switch origin {
+	case domain.PaymentDefault:
+		url = s.paymentURLDefault
+	case domain.PaymentFallback:
+		url = s.paymentURLFallback
+	}
+
+	req, err := http.NewRequest("GET", url+"/payments/service-health", nil)
+	if err != nil {
+		return fmt.Errorf("erro ao criar requisição: %w", err)
+	}
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("erro na requisição: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API error: status %d, body: %s", resp.StatusCode, respBody)
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("erro ao ler resposta: %w", err)
+	}
+
+	var health HealthCheck
+	err = sonic.Unmarshal(respBody, &health)
+	if err != nil {
+		return fmt.Errorf("erro ao decodificar resposta: %w", err)
+	}
+
+	if health.Failing {
+		return fmt.Errorf("API %s is unhealthy", url)
+	}
+
+	return nil
+}
+
+func (s *service) isHealthy(origin domain.PaymentProcessor) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var lastCheck *time.Time
+	switch origin {
+	case domain.PaymentDefault:
+		lastCheck = &s.lastHealthCheckDefault
+	case domain.PaymentFallback:
+		lastCheck = &s.lastHealthCheckFallback
+	}
+
+	now := time.Now()
+	if now.Sub(*lastCheck) < 5*time.Second {
+		return s.healthCache[origin]
+	}
+
+	err := s.GetHealthCheck(origin)
+	*lastCheck = now
+	s.healthCache[origin] = (err == nil)
+
+	return s.healthCache[origin]
 }
