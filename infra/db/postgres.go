@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"rinha-de-backend-2025/domain"
+	"rinha-de-backend-2025/core/model"
 	"time"
 )
 
@@ -12,13 +12,13 @@ type Payment struct {
 	ID            string
 	CorrelationID string
 	Amount        float64
-	Origin        domain.PaymentProcessor
+	Origin        model.PaymentProcessor
 	RequestedAt   time.Time
 }
 
 type Repository interface {
-	SavePayment(p domain.Payment, origin domain.PaymentProcessor) (string, error)
-	GetPaymentSummary(ctx context.Context, from, to time.Time) (*domain.PaymentSummaryResponse, error)
+	SavePayment(p model.Payment, origin model.PaymentProcessor) (string, error)
+	GetPaymentSummary(ctx context.Context, from, to time.Time) (*model.PaymentSummaryResponse, error)
 }
 
 type PostgresRepository struct {
@@ -45,7 +45,7 @@ func NewPostgresRepository(ctx context.Context, dsn string, maxConnections int) 
 	return &PostgresRepository{pool: pool}, nil
 }
 
-func (r *PostgresRepository) SavePayment(p domain.Payment, origin domain.PaymentProcessor) (string, error) {
+func (r *PostgresRepository) SavePayment(p model.Payment, origin model.PaymentProcessor) (string, error) {
 	query := `
     	INSERT INTO payments (correlation_id, amount, origin, requested_at)
     	VALUES ($1, $2, $3, $4)
@@ -57,7 +57,7 @@ func (r *PostgresRepository) SavePayment(p domain.Payment, origin domain.Payment
 	return p.CorrelationID, nil
 }
 
-func (r *PostgresRepository) GetPaymentSummary(ctx context.Context, from, to time.Time) (*domain.PaymentSummaryResponse, error) {
+func (r *PostgresRepository) GetPaymentSummary(ctx context.Context, from, to time.Time) (*model.PaymentSummaryResponse, error) {
 	query := `
 		SELECT origin, COUNT(*) AS total_requests, COALESCE(SUM(amount), 0) AS total_amount
 		FROM payments
@@ -71,7 +71,7 @@ func (r *PostgresRepository) GetPaymentSummary(ctx context.Context, from, to tim
 	}
 	defer rows.Close()
 
-	summary := domain.PaymentSummaryResponse{}
+	summary := model.PaymentSummaryResponse{}
 
 	for rows.Next() {
 		var origin int
@@ -82,14 +82,14 @@ func (r *PostgresRepository) GetPaymentSummary(ctx context.Context, from, to tim
 			return nil, fmt.Errorf("scan error: %w", err)
 		}
 
-		switch domain.PaymentProcessor(origin) {
-		case domain.PaymentDefault:
-			summary.Default = domain.PaymentSummary{
+		switch model.PaymentProcessor(origin) {
+		case model.PaymentDefault:
+			summary.Default = model.PaymentSummary{
 				TotalRequests: totalRequests,
 				TotalAmount:   totalAmount,
 			}
-		case domain.PaymentFallback:
-			summary.Fallback = domain.PaymentSummary{
+		case model.PaymentFallback:
+			summary.Fallback = model.PaymentSummary{
 				TotalRequests: totalRequests,
 				TotalAmount:   totalAmount,
 			}

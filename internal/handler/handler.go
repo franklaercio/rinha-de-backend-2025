@@ -1,9 +1,11 @@
-package payments
+package handler
 
 import (
 	"io"
 	"log"
 	"net/http"
+	"rinha-de-backend-2025/core/model"
+	"rinha-de-backend-2025/core/service"
 	"time"
 
 	"github.com/bytedance/sonic"
@@ -11,11 +13,11 @@ import (
 )
 
 type Handler struct {
-	service Service
+	paymentService service.PaymentService
 }
 
-func NewHandler(service Service) *Handler {
-	return &Handler{service: service}
+func NewHandler(paymentService service.PaymentService) *Handler {
+	return &Handler{paymentService: paymentService}
 }
 
 type CreatePaymentRequest struct {
@@ -34,32 +36,32 @@ func (h *Handler) SendPayment(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid request payload"})
 	}
 
-	input := CreatePaymentInput{
+	input := model.Payment{
 		CorrelationID: req.CorrelationID,
 		Amount:        req.Amount,
 		RequestedAt:   time.Now().UTC(),
 	}
 
-	if err := h.service.CreatePayment(input); err != nil {
+	if err := h.paymentService.CreatePayment(input); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
-	return c.JSON(http.StatusCreated, map[string]string{"message": "payment created"})
+	return c.JSON(http.StatusCreated, map[string]string{"message": "service created"})
 }
 
 func (h *Handler) GetSummary(c echo.Context) error {
 	from := c.QueryParam("from")
 	to := c.QueryParam("to")
 
-	log.Printf("[INFO] GET /payments-summary?from=%s&to=%s", from, to)
+	log.Printf("[INFO] GET /service-summary?from=%s&to=%s", from, to)
 
 	if from == "" || to == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "'from' and 'to' query params required"})
 	}
 
-	summary, err := h.service.GetPaymentSummary(from, to)
+	summary, err := h.paymentService.RetrievePaymentSummary(from, to)
 	if err != nil {
-		log.Printf("[ERROR] Error getting payment summary: %v", err)
+		log.Printf("[ERROR] Error getting service summary: %v", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
