@@ -71,6 +71,10 @@ func NewClient(
 }
 
 func (c *client) SendPayment(payment model.Payment, origin model.PaymentProcessor) error {
+	if _, err := c.DB.SavePayment(payment, origin); err != nil {
+		log.Printf("[ERROR] Falha ao salvar o pagamento localmente para CorrelationID '%s' antes de enviar para a API externa: %v", payment.CorrelationID, err)
+	}
+
 	payload := map[string]interface{}{
 		"correlationId": payment.CorrelationID,
 		"amount":        payment.Amount,
@@ -118,10 +122,6 @@ func (c *client) SendPayment(payment model.Payment, origin model.PaymentProcesso
 			return fmt.Errorf("circuit breaker para %s está aberto", origin)
 		}
 		return err
-	}
-
-	if _, err := c.DB.SavePayment(payment, origin); err != nil {
-		log.Printf("[ERROR] Falha ao salvar o pagamento localmente para CorrelationID '%s' antes de enviar para a API externa: %v", payment.CorrelationID, err)
 	}
 
 	log.Printf("[INFO] Pagamento salvo com sucesso: %s", payment.CorrelationID)
