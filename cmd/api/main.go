@@ -33,6 +33,7 @@ func main() {
 
 	paymentService := service.NewPaymentService(postgres, redisClient)
 	paymentHandler := handler.NewHandler(paymentService)
+	
 	apiClient := externalapi.NewClient(postgres, cfg.PaymentURLDefault, cfg.PaymentURLFallback)
 	_ = worker.NewWorker(cfg.PaymentWorkers, postgres, redisClient, paymentService, apiClient)
 
@@ -40,7 +41,7 @@ func main() {
 	e.HideBanner = true
 	e.HidePort = true
 	e.Logger.SetOutput(io.Discard)
-	
+
 	e.POST("/payments", paymentHandler.SendPayment)
 	e.GET("/payments-summary", paymentHandler.GetSummary)
 

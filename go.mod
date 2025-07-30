@@ -6,8 +6,8 @@ require (
 	github.com/bytedance/sonic v1.14.0
 	github.com/jackc/pgx/v5 v5.7.5
 	github.com/labstack/echo/v4 v4.13.4
-	github.com/lib/pq v1.10.9
 	github.com/redis/go-redis/v9 v9.11.0
+	github.com/sony/gobreaker v1.0.0
 )
 
 require (

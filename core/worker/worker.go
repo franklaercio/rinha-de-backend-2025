@@ -7,7 +7,7 @@ import (
 	"rinha-de-backend-2025/core/model"
 	"rinha-de-backend-2025/core/service"
 	"rinha-de-backend-2025/infra/db"
-	"rinha-de-backend-2025/infra/externalapi"
+	"rinha-de-backend-2025/infra/externalapi" // Adicionar import
 	"rinha-de-backend-2025/infra/redis"
 	"time"
 )
@@ -20,15 +20,15 @@ type Worker struct {
 	DB             *db.PostgresRepository
 	RedisClient    redis.RedisClient
 	PaymentService service.PaymentService
-	ExternalApi    externalapi.Client
+	ExternalApi    externalapi.Client // Tipo agora é externalapi.Client
 }
 
-func NewWorker(workerCount int, db *db.PostgresRepository, redis redis.RedisClient, paymentService service.PaymentService, externalapi externalapi.Client) *Worker {
+func NewWorker(workerCount int, db *db.PostgresRepository, redis redis.RedisClient, paymentService service.PaymentService, externalapiClient externalapi.Client) *Worker { // Renomear parâmetro
 	w := &Worker{
 		DB:             db,
 		RedisClient:    redis,
 		PaymentService: paymentService,
-		ExternalApi:    externalapi,
+		ExternalApi:    externalapiClient, // Usar o novo nome
 	}
 
 	if workerCount <= 0 {
@@ -66,23 +66,35 @@ func (w *Worker) Start(worker int) {
 }
 
 func (w *Worker) process(worker int, payment model.Payment, queueName string) {
-	if w.ExternalApi.IsHealthy(model.PaymentDefault) {
-		if err := w.ExternalApi.SendPayment(payment, model.PaymentDefault); err == nil {
-			//log.Printf("[Worker %d] Payment sent via Default: %s", worker, payment.CorrelationID)
-			return
-		}
-		log.Printf("[Worker %d] Default failed for %s", worker, payment.CorrelationID)
+	errDefault := w.ExternalApi.SendPayment(payment, model.PaymentDefault)
+	if errDefault == nil {
+		//log.Printf("[Worker %d] Payment sent via Default: %s", worker, payment.CorrelationID)
+		return
 	}
 
-	if w.ExternalApi.IsHealthy(model.PaymentFallback) {
-		if err := w.ExternalApi.SendPayment(payment, model.PaymentFallback); err == nil {
-			//log.Printf("[Worker %d] Payment sent via Fallback: %s", worker, payment.CorrelationID)
-			return
-		}
-		log.Printf("[Worker %d] Fallback failed for %s", worker, payment.CorrelationID)
+	//// Se o erro for do Circuit Breaker, não tentamos o fallback imediatamente se o CB estiver aberto
+	//if errDefault == gobreaker.ErrOpenState {
+	//	log.Printf("[Worker %d] Circuit Breaker do Default está aberto para %s. Tentando Fallback...", worker, payment.CorrelationID)
+	//	// Continua para tentar o fallback
+	//} else {
+	//	log.Printf("[Worker %d] Default failed for %s: %v", worker, payment.CorrelationID, errDefault)
+	//}
+
+	// Tenta o Fallback
+	errFallback := w.ExternalApi.SendPayment(payment, model.PaymentFallback)
+	if errFallback == nil {
+		//log.Printf("[Worker %d] Payment sent via Fallback: %s", worker, payment.CorrelationID)
+		return
 	}
 
+	//if errFallback == gobreaker.ErrOpenState {
+	//	log.Printf("[Worker %d] Circuit Breaker do Fallback também está aberto para %s. Re-enfileirando...", worker, payment.CorrelationID)
+	//} else {
+	//	log.Printf("[Worker %d] Fallback failed for %s: %v", worker, payment.CorrelationID, errFallback)
+	//}
+
+	// Ambos falharam ou os Circuit Breakers estão abertos, re-enfileira
 	//log.Printf("[Worker %d] Re-enqueueing payment: %s", worker, payment.CorrelationID)
-	paymentJSON, _ := sonic.Marshal(payment)
-	_ = w.RedisClient.LPush(context.Background(), queueName, paymentJSON)
+	paymentJSON, _ := sonic.Marshal(payment)                              // Erro ignorado intencionalmente para não bloquear o re-enfileiramento
+	_ = w.RedisClient.LPush(context.Background(), queueName, paymentJSON) // Erro ignorado intencionalmente
 }

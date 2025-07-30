@@ -2,6 +2,7 @@ package externalapi
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bytedance/sonic"
+	"github.com/sony/gobreaker"
 )
 
 type Client interface {
@@ -28,6 +30,8 @@ type client struct {
 	lastHealthCheckFallback time.Time
 	healthCache             map[model.PaymentProcessor]bool
 	mu                      sync.Mutex
+	cbDefault               *gobreaker.CircuitBreaker
+	cbFallback              *gobreaker.CircuitBreaker
 }
 
 type HealthCheck struct {
@@ -40,6 +44,19 @@ func NewClient(
 	defaultURL string,
 	fallbackURL string,
 ) Client {
+	settings := gobreaker.Settings{
+		Name:        "ExternalPaymentService",
+		MaxRequests: 1,
+		Interval:    5 * time.Second,
+		Timeout:     10 * time.Second,
+		ReadyToTrip: func(counts gobreaker.Counts) bool {
+			return counts.ConsecutiveFailures > 5
+		},
+		OnStateChange: func(name string, from gobreaker.State, to gobreaker.State) {
+			log.Printf("Circuit Breaker '%s' changed state from '%s' to '%s'", name, from, to)
+		},
+	}
+
 	return &client{
 		DB:                 db,
 		paymentURLDefault:  defaultURL,
@@ -48,6 +65,8 @@ func NewClient(
 			Timeout: 3 * time.Second,
 		},
 		healthCache: make(map[model.PaymentProcessor]bool),
+		cbDefault:   gobreaker.NewCircuitBreaker(settings),
+		cbFallback:  gobreaker.NewCircuitBreaker(settings),
 	}
 }
 
@@ -64,29 +83,49 @@ func (c *client) SendPayment(payment model.Payment, origin model.PaymentProcesso
 	}
 
 	url := c.resolveURL(origin)
+	cb := c.cbDefault
+	if origin == model.PaymentFallback {
+		cb = c.cbFallback
+	}
 
-	req, err := http.NewRequest("POST", url+"/payments", bytes.NewBuffer(body))
+	_, err = cb.Execute(func() (interface{}, error) {
+		req, err := http.NewRequestWithContext(context.Background(), "POST", url+"/payments", bytes.NewBuffer(body)) // Usar WithContext
+		if err != nil {
+			return nil, fmt.Errorf("erro ao criar requisição: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			if err == context.Canceled || err == context.DeadlineExceeded {
+				return nil, err
+			}
+			return nil, fmt.Errorf("erro na requisição: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode >= 300 {
+			respBody, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("API error: status %d, body: %s", resp.StatusCode, respBody)
+		}
+
+		if _, err := c.DB.SavePayment(payment, origin); err != nil {
+			log.Printf("[ERROR] ERRO CRÍTICO ao salvar no banco: %v", err)
+			return nil, err
+		}
+
+		return nil, nil
+	})
+
 	if err != nil {
-		return fmt.Errorf("erro ao criar requisição: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("erro na requisição: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error: status %d, body: %s", resp.StatusCode, respBody)
+		if err == gobreaker.ErrOpenState {
+			log.Printf("[Circuit Breaker] API %s está em estado OPEN. Não enviando pagamento %s.", origin, payment.CorrelationID)
+			return fmt.Errorf("circuit breaker para %s está aberto", origin)
+		}
+		return err
 	}
 
-	if _, err := c.DB.SavePayment(payment, origin); err != nil {
-		log.Printf("[ERROR] ERRO CRÍTICO ao salvar no banco: %v", err)
-	}
 	//log.Printf("[INFO] Payment %s saved with success", payment.CorrelationID)
-
 	return nil
 }
 
