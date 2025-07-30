@@ -3,7 +3,9 @@ package db
 import (
 	"context"
 	"fmt"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"log"
 	"rinha-de-backend-2025/core/model"
 	"time"
 )
@@ -52,7 +54,11 @@ func (r *PostgresRepository) SavePayment(p model.Payment, origin model.PaymentPr
    `
 	_, err := r.pool.Exec(context.Background(), query, p.CorrelationID, p.Amount, origin, p.RequestedAt)
 	if err != nil {
-		return "", fmt.Errorf("could not save payment: %w", err)
+		if pgErr, ok := err.(*pgconn.PgError); ok && pgErr.Code == "23505" {
+			log.Printf("[INFO] Pagamento com CorrelationID '%s' já existe. Pulando inserção.", p.CorrelationID)
+			return p.CorrelationID, nil
+		}
+		return "", fmt.Errorf("não foi possível salvar o pagamento: %w", err)
 	}
 	return p.CorrelationID, nil
 }

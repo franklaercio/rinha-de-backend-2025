@@ -58,7 +58,7 @@ func (s *paymentService) CreatePayment(input model.Payment) error {
 		return fmt.Errorf("erro ao enfileirar pagamento: %w", err)
 	}
 
-	//log.Printf("Payment enqueued: %s", payment.CorrelationID)
+	log.Printf("Payment enqueued: %s", payment.CorrelationID)
 	return nil
 }
 

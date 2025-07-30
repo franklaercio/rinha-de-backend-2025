@@ -46,11 +46,11 @@ func NewClient(
 ) Client {
 	settings := gobreaker.Settings{
 		Name:        "ExternalPaymentService",
-		MaxRequests: 1,
-		Interval:    5 * time.Second,
-		Timeout:     10 * time.Second,
+		MaxRequests: 10,
+		Interval:    2 * time.Second,
+		Timeout:     4 * time.Second,
 		ReadyToTrip: func(counts gobreaker.Counts) bool {
-			return counts.ConsecutiveFailures > 5
+			return counts.ConsecutiveFailures > 10
 		},
 		OnStateChange: func(name string, from gobreaker.State, to gobreaker.State) {
 			log.Printf("Circuit Breaker '%s' changed state from '%s' to '%s'", name, from, to)
@@ -89,7 +89,7 @@ func (c *client) SendPayment(payment model.Payment, origin model.PaymentProcesso
 	}
 
 	_, err = cb.Execute(func() (interface{}, error) {
-		req, err := http.NewRequestWithContext(context.Background(), "POST", url+"/payments", bytes.NewBuffer(body)) // Usar WithContext
+		req, err := http.NewRequestWithContext(context.Background(), "POST", url+"/payments", bytes.NewBuffer(body))
 		if err != nil {
 			return nil, fmt.Errorf("erro ao criar requisição: %w", err)
 		}
@@ -100,18 +100,13 @@ func (c *client) SendPayment(payment model.Payment, origin model.PaymentProcesso
 			if err == context.Canceled || err == context.DeadlineExceeded {
 				return nil, err
 			}
-			return nil, fmt.Errorf("erro na requisição: %w", err)
+			return nil, fmt.Errorf("erro na requisição para API externa: %w", err)
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode >= 300 {
 			respBody, _ := io.ReadAll(resp.Body)
-			return nil, fmt.Errorf("API error: status %d, body: %s", resp.StatusCode, respBody)
-		}
-
-		if _, err := c.DB.SavePayment(payment, origin); err != nil {
-			log.Printf("[ERROR] ERRO CRÍTICO ao salvar no banco: %v", err)
-			return nil, err
+			return nil, fmt.Errorf("erro na API externa: status %d, corpo: %s", resp.StatusCode, respBody)
 		}
 
 		return nil, nil
@@ -119,13 +114,18 @@ func (c *client) SendPayment(payment model.Payment, origin model.PaymentProcesso
 
 	if err != nil {
 		if err == gobreaker.ErrOpenState {
-			log.Printf("[Circuit Breaker] API %s está em estado OPEN. Não enviando pagamento %s.", origin, payment.CorrelationID)
+			log.Printf("[Circuit Breaker] A API %s está em estado OPEN. Não enviando pagamento %s.", origin, payment.CorrelationID)
 			return fmt.Errorf("circuit breaker para %s está aberto", origin)
 		}
 		return err
 	}
 
-	//log.Printf("[INFO] Payment %s saved with success", payment.CorrelationID)
+	if _, err := c.DB.SavePayment(payment, origin); err != nil {
+		log.Printf("[ERROR] Falha ao salvar o pagamento localmente para CorrelationID '%s' antes de enviar para a API externa: %v", payment.CorrelationID, err)
+	}
+
+	log.Printf("[INFO] Pagamento salvo com sucesso: %s", payment.CorrelationID)
+
 	return nil
 }
 
