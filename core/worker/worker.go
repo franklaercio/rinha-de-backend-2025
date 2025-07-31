@@ -2,7 +2,7 @@ package worker
 
 import (
 	"context"
-	"github.com/bytedance/sonic"
+	"encoding/json"
 	"log"
 	"rinha-de-backend-2025/core/model"
 	"rinha-de-backend-2025/core/service"
@@ -55,7 +55,7 @@ func (w *Worker) Start(worker int) {
 
 		paymentJSON := result[1]
 		var payment model.Payment
-		if err := sonic.Unmarshal([]byte(paymentJSON), &payment); err != nil {
+		if err := json.Unmarshal([]byte(paymentJSON), &payment); err != nil {
 			log.Printf("[Worker %d] JSON inválido: %v. Ignorando.", worker, err)
 			continue
 		}
@@ -71,13 +71,13 @@ func (w *Worker) process(worker int, payment model.Payment, queueName string) {
 		return
 	}
 
-	errFallback := w.ExternalApi.SendPayment(payment, model.PaymentFallback)
-	if errFallback == nil {
-		log.Printf("[Worker %d] Payment sent via Fallback: %s", worker, payment.CorrelationID)
-		return
-	}
+	//errFallback := w.ExternalApi.SendPayment(payment, model.PaymentFallback)
+	//if errFallback == nil {
+	//	log.Printf("[Worker %d] Payment sent via Fallback: %s", worker, payment.CorrelationID)
+	//	return
+	//}
 
 	log.Printf("[Worker %d] Re-enqueueing payment: %s", worker, payment.CorrelationID)
-	paymentJSON, _ := sonic.Marshal(payment)
+	paymentJSON, _ := json.Marshal(payment)
 	_ = w.RedisClient.LPush(context.Background(), queueName, paymentJSON)
 }

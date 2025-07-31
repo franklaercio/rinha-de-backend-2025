@@ -3,9 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/labstack/echo/v4"
-	"io"
 	"log"
+	"net/http"
 	"rinha-de-backend-2025/core/service"
 	"rinha-de-backend-2025/core/worker"
 	"rinha-de-backend-2025/infra/db"
@@ -33,20 +32,17 @@ func main() {
 
 	paymentService := service.NewPaymentService(postgres, redisClient)
 	paymentHandler := handler.NewHandler(paymentService)
-	
+
 	apiClient := externalapi.NewClient(postgres, cfg.PaymentURLDefault, cfg.PaymentURLFallback)
 	_ = worker.NewWorker(cfg.PaymentWorkers, postgres, redisClient, paymentService, apiClient)
 
-	e := echo.New()
-	e.HideBanner = true
-	e.HidePort = true
-	e.Logger.SetOutput(io.Discard)
+	mux := http.NewServeMux()
 
-	e.POST("/payments", paymentHandler.SendPayment)
-	e.GET("/payments-summary", paymentHandler.GetSummary)
+	mux.HandleFunc("/payments", paymentHandler.SendPayment)
+	mux.HandleFunc("/payments-summary", paymentHandler.GetSummary)
 
 	log.Printf("Servidor iniciado na porta :%s", cfg.HTTPPort)
-	if err := e.Start(":" + cfg.HTTPPort); err != nil {
+	if err := http.ListenAndServe(":9999", mux); err != nil {
 		log.Fatalf("Erro ao iniciar servidor: %v", err)
 	}
 }

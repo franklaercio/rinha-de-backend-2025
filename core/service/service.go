@@ -2,14 +2,13 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"rinha-de-backend-2025/core/model"
 	"rinha-de-backend-2025/infra/db"
 	"rinha-de-backend-2025/infra/redis"
 	"time"
-
-	"github.com/bytedance/sonic"
 )
 
 const (
@@ -46,7 +45,7 @@ func (s *paymentService) CreatePayment(input model.Payment) error {
 		RequestedAt:   time.Now().UTC(),
 	}
 
-	paymentJSON, err := sonic.Marshal(payment)
+	paymentJSON, err := json.Marshal(payment)
 	if err != nil {
 		log.Printf("Error marshaling service: %v", err)
 		return fmt.Errorf("could not process service: %w", err)

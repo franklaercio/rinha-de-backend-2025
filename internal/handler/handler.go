@@ -1,15 +1,11 @@
 package handler
 
 import (
-	"io"
+	"encoding/json"
 	"log"
 	"net/http"
 	"rinha-de-backend-2025/core/model"
 	"rinha-de-backend-2025/core/service"
-	"time"
-
-	"github.com/bytedance/sonic"
-	"github.com/labstack/echo/v4"
 )
 
 type Handler struct {
@@ -25,51 +21,51 @@ type CreatePaymentRequest struct {
 	Amount        float64 `json:"amount"`
 }
 
-func (h *Handler) SendPayment(c echo.Context) error {
-	body, err := io.ReadAll(c.Request().Body)
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "failed to read request body"})
+func (h *Handler) SendPayment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 
 	var req CreatePaymentRequest
-	if err := sonic.Unmarshal(body, &req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid request payload"})
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
 	}
 
 	input := model.Payment{
 		CorrelationID: req.CorrelationID,
 		Amount:        req.Amount,
-		RequestedAt:   time.Now().UTC(),
 	}
 
 	if err := h.paymentService.CreatePayment(input); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
-	return c.JSON(http.StatusCreated, map[string]string{"message": "service created"})
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
 }
 
-func (h *Handler) GetSummary(c echo.Context) error {
-	from := c.QueryParam("from")
-	to := c.QueryParam("to")
+func (h *Handler) GetSummary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
 
-	log.Printf("[INFO] GET /service-summary?from=%s&to=%s", from, to)
+	from := r.URL.Query().Get("from")
+	to := r.URL.Query().Get("to")
+
+	log.Printf("[INFO] GET /payment-summary?from=%s&to=%s", from, to)
 
 	if from == "" || to == "" {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "'from' and 'to' query params required"})
+		http.Error(w, "missing 'from' or 'to' query parameters", http.StatusBadRequest)
+		return
 	}
 
 	summary, err := h.paymentService.RetrievePaymentSummary(from, to)
 	if err != nil {
-		log.Printf("[ERROR] Error getting service summary: %v", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
-	respBytes, err := sonic.Marshal(summary)
-	if err != nil {
-		log.Printf("[ERROR] Error encoding response: %v", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to encode response"})
-	}
-
-	return c.Blob(http.StatusOK, echo.MIMEApplicationJSON, respBytes)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(summary)
 }

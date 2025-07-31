@@ -3,6 +3,7 @@ package externalapi
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -12,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bytedance/sonic"
 	"github.com/sony/gobreaker"
 )
 
@@ -71,17 +71,13 @@ func NewClient(
 }
 
 func (c *client) SendPayment(payment model.Payment, origin model.PaymentProcessor) error {
-	if _, err := c.DB.SavePayment(payment, origin); err != nil {
-		log.Printf("[ERROR] Falha ao salvar o pagamento localmente para CorrelationID '%s' antes de enviar para a API externa: %v", payment.CorrelationID, err)
-	}
-
 	payload := map[string]interface{}{
 		"correlationId": payment.CorrelationID,
 		"amount":        payment.Amount,
-		"requestedAt":   payment.RequestedAt.Format(time.RFC3339Nano),
+		"requestedAt":   time.Now().UTC(),
 	}
 
-	body, err := sonic.Marshal(payload)
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("erro ao serializar JSON: %w", err)
 	}
@@ -124,7 +120,11 @@ func (c *client) SendPayment(payment model.Payment, origin model.PaymentProcesso
 		return err
 	}
 
-	log.Printf("[INFO] Pagamento salvo com sucesso: %s", payment.CorrelationID)
+	if _, err := c.DB.SavePayment(payment, origin); err != nil {
+		log.Printf("[ERROR] Falha ao salvar o pagamento localmente para CorrelationID '%s' antes de enviar para a API externa: %v", payment.CorrelationID, err)
+	}
+
+	log.Printf("[INFO] Pagamento salvo com sucesso no %s: %s at %s", url, payment.CorrelationID, payment.RequestedAt)
 
 	return nil
 }
@@ -154,7 +154,7 @@ func (c *client) getHealthCheck(origin model.PaymentProcessor) error {
 	}
 
 	var health HealthCheck
-	if err := sonic.Unmarshal(respBody, &health); err != nil {
+	if err := json.Unmarshal(respBody, &health); err != nil {
 		return fmt.Errorf("erro ao decodificar resposta: %w", err)
 	}
 

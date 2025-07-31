@@ -42,8 +42,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.1"
-          memory: "40MB"
+          cpus: "0.4"
+          memory: "80MB"
 
   nginx:
     image: nginx:1.25-alpine
@@ -60,7 +60,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.10"
+          cpus: "0.2"
           memory: "20MB"
 
   api1:
@@ -83,7 +83,7 @@ services:
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
       HTTP_PORT: "9999"
-      PAYMENT_WORKERS: "5"
+      PAYMENT_WORKERS: "10"
       PAYMENT_URL_DEFAULT: "http://payment-processor-default:8080"
       PAYMENT_URL_FALLBACK: "http://payment-processor-fallback:8080"
     deploy:
@@ -112,7 +112,7 @@ services:
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
       HTTP_PORT: "9999"
-      PAYMENT_WORKERS: "5"
+      PAYMENT_WORKERS: "10"
       PAYMENT_URL_DEFAULT: "http://payment-processor-default:8080"
       PAYMENT_URL_FALLBACK: "http://payment-processor-fallback:8080"
     deploy:
