@@ -71,11 +71,11 @@ func (w *Worker) process(worker int, payment model.Payment, queueName string) {
 		return
 	}
 
-	//errFallback := w.ExternalApi.SendPayment(payment, model.PaymentFallback)
-	//if errFallback == nil {
-	//	log.Printf("[Worker %d] Payment sent via Fallback: %s", worker, payment.CorrelationID)
-	//	return
-	//}
+	errFallback := w.ExternalApi.SendPayment(payment, model.PaymentFallback)
+	if errFallback == nil {
+		log.Printf("[Worker %d] Payment sent via Fallback: %s", worker, payment.CorrelationID)
+		return
+	}
 
 	log.Printf("[Worker %d] Re-enqueueing payment: %s", worker, payment.CorrelationID)
 	paymentJSON, _ := json.Marshal(payment)
