@@ -1,16 +1,20 @@
-package payments
+package handler
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
+	"rinha-de-backend-2025/core/model"
+	"rinha-de-backend-2025/core/service"
+	"time"
 )
 
 type Handler struct {
-	service Service
+	paymentService service.PaymentService
 }
 
-func NewHandler(service Service) *Handler {
-	return &Handler{service: service}
+func NewHandler(paymentService service.PaymentService) *Handler {
+	return &Handler{paymentService: paymentService}
 }
 
 type CreatePaymentRequest struct {
@@ -28,13 +32,13 @@ func (h *Handler) SendPayment(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 	}
 
-	input := CreatePaymentInput{
+	input := model.Payment{
 		CorrelationID: req.CorrelationID,
 		Amount:        req.Amount,
+		RequestedAt:   time.Now().UTC(),
 	}
 
-	err := h.service.CreatePayment(input)
-	if err != nil {
+	if err := h.paymentService.CreatePayment(input); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -45,19 +49,20 @@ func (h *Handler) SendPayment(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) GetSummary(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 
 	from := r.URL.Query().Get("from")
 	to := r.URL.Query().Get("to")
+
+	log.Printf("[INFO] GET /payment-summary?from=%s&to=%s", from, to)
 
 	if from == "" || to == "" {
 		http.Error(w, "missing 'from' or 'to' query parameters", http.StatusBadRequest)
 		return
 	}
 
-	summary, err := h.service.GetPaymentSummary(from, to)
+	summary, err := h.paymentService.RetrievePaymentSummary(from, to)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

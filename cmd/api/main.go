@@ -1,32 +1,48 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"net/http"
-	"rinha-de-backend-2025/internal/db"
-	"rinha-de-backend-2025/internal/payments"
-
-	_ "github.com/lib/pq"
+	"rinha-de-backend-2025/core/service"
+	"rinha-de-backend-2025/core/worker"
+	"rinha-de-backend-2025/infra/db"
+	"rinha-de-backend-2025/infra/externalapi"
+	"rinha-de-backend-2025/infra/redis"
+	"rinha-de-backend-2025/internal/config"
+	"rinha-de-backend-2025/internal/handler"
 )
 
 func main() {
-	dsn := "postgres://postgres:postgres@localhost:5432/rinha?sslmode=disable"
+	cfg := config.Load()
 
-	repo, err := db.NewPostgresRepository(dsn)
+	dsn := fmt.Sprintf("postgres://%s:%s@%s:5432/%s?sslmode=disable",
+		cfg.DBUser, cfg.DBPassword, cfg.DBHost, cfg.DBName)
+
+	postgres, err := db.NewPostgresRepository(context.Background(), dsn, cfg.DBMaxConnections)
 	if err != nil {
-		log.Fatalf("erro ao conectar ao banco: %v", err)
+		log.Fatalf("Erro ao conectar ao banco: %v", err)
 	}
 
-	mux := http.NewServeMux()
+	redisClient, err := redis.NewRedisClient(cfg.RedisHost, cfg.RedisPort, "")
+	if err != nil {
+		log.Fatalf("Erro ao conectar ao Redis: %v", err)
+	}
 
-	service := payments.NewService(*repo, "http://localhost:8001", "http://localhost:8002")
-	paymentHandler := payments.NewHandler(service)
+	paymentService := service.NewPaymentService(postgres, redisClient)
+	paymentHandler := handler.NewHandler(paymentService)
+
+	apiClient := externalapi.NewClient(postgres, cfg.PaymentURLDefault, cfg.PaymentURLFallback)
+	_ = worker.NewWorker(cfg.PaymentWorkers, postgres, redisClient, paymentService, apiClient)
+
+	mux := http.NewServeMux()
 
 	mux.HandleFunc("/payments", paymentHandler.SendPayment)
 	mux.HandleFunc("/payments-summary", paymentHandler.GetSummary)
 
-	log.Println("Starting server at :9999")
+	log.Printf("Servidor iniciado na porta :%s", cfg.HTTPPort)
 	if err := http.ListenAndServe(":9999", mux); err != nil {
-		log.Fatalf("Could not start server: %v", err)
+		log.Fatalf("Erro ao iniciar servidor: %v", err)
 	}
 }
