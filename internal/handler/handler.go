@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"rinha-de-backend-2025/core/model"
 	"rinha-de-backend-2025/core/service"
+	"time"
 )
 
 type Handler struct {
@@ -34,6 +35,7 @@ func (h *Handler) SendPayment(w http.ResponseWriter, r *http.Request) {
 	input := model.Payment{
 		CorrelationID: req.CorrelationID,
 		Amount:        req.Amount,
+		RequestedAt:   time.Now().UTC(),
 	}
 
 	if err := h.paymentService.CreatePayment(input); err != nil {

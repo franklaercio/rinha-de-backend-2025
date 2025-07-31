@@ -74,7 +74,7 @@ func (c *client) SendPayment(payment model.Payment, origin model.PaymentProcesso
 	payload := map[string]interface{}{
 		"correlationId": payment.CorrelationID,
 		"amount":        payment.Amount,
-		"requestedAt":   time.Now().UTC(),
+		"requestedAt":   payment.RequestedAt,
 	}
 
 	body, err := json.Marshal(payload)
