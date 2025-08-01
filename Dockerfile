@@ -17,6 +17,6 @@ FROM scratch
 
 COPY --from=builder /bin/app /app
 
-EXPOSE 9999
+EXPOSE 8080
 
 ENTRYPOINT ["/app"]
