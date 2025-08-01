@@ -62,14 +62,25 @@ func (s *paymentService) CreatePayment(input model.Payment) error {
 }
 
 func (s *paymentService) RetrievePaymentSummary(from, to string) (*model.PaymentSummaryResponse, error) {
-	fromTime, err := time.Parse(time.RFC3339, from)
-	if err != nil {
-		return nil, fmt.Errorf("formato inválido para 'from': %w", err)
+	var fromTime, toTime time.Time
+	var err error
+
+	if from == "" {
+		fromTime = time.Time{}
+	} else {
+		fromTime, err = time.Parse(time.RFC3339, from)
+		if err != nil {
+			return nil, fmt.Errorf("formato inválido para 'from': %w", err)
+		}
 	}
 
-	toTime, err := time.Parse(time.RFC3339, to)
-	if err != nil {
-		return nil, fmt.Errorf("formato inválido para 'to': %w", err)
+	if to == "" {
+		toTime = time.Now()
+	} else {
+		toTime, err = time.Parse(time.RFC3339, to)
+		if err != nil {
+			return nil, fmt.Errorf("formato inválido para 'from': %w", err)
+		}
 	}
 
 	ctx := context.Background()

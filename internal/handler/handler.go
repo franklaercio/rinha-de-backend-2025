@@ -58,8 +58,7 @@ func (h *Handler) GetSummary(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[INFO] GET /payment-summary?from=%s&to=%s", from, to)
 
 	if from == "" || to == "" {
-		http.Error(w, "missing 'from' or 'to' query parameters", http.StatusBadRequest)
-		return
+
 	}
 
 	summary, err := h.paymentService.RetrievePaymentSummary(from, to)
