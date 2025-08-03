@@ -48,7 +48,7 @@ func (w *Worker) Start(worker int) {
 	for {
 		result, err := w.RedisClient.BRPop(ctx, 0, queueName)
 		if err != nil {
-			log.Printf("[Worker %d] Erro no BRPop: %v. Retry em 5s...", worker, err)
+			log.Printf("[Worker %d] Error in BRPop: %v. Retry in 5s...", worker, err)
 			time.Sleep(5 * time.Second)
 			continue
 		}
@@ -56,7 +56,7 @@ func (w *Worker) Start(worker int) {
 		paymentJSON := result[1]
 		var payment model.Payment
 		if err := json.Unmarshal([]byte(paymentJSON), &payment); err != nil {
-			log.Printf("[Worker %d] JSON inválido: %v. Ignorando.", worker, err)
+			log.Printf("[Worker %d] Invalid JSON: %v. Ignoring payment.", worker, err)
 			continue
 		}
 

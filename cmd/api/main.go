@@ -42,7 +42,7 @@ func main() {
 	mux.HandleFunc("/payments-summary", paymentHandler.GetSummary)
 
 	log.Printf("Servidor iniciado na porta :%s", cfg.HTTPPort)
-	if err := http.ListenAndServe(":9999", mux); err != nil {
+	if err := http.ListenAndServe(":"+cfg.HTTPPort, mux); err != nil {
 		log.Fatalf("Erro ao iniciar servidor: %v", err)
 	}
 }

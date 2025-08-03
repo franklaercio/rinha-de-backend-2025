@@ -54,7 +54,7 @@ func (s *paymentService) CreatePayment(input model.Payment) error {
 	ctx := context.Background()
 	if err := s.redisClient.LPush(ctx, paymentQueueName, paymentJSON); err != nil {
 		log.Printf("CRITICAL: Failed to enqueue service to Redis. CorrelationID: %s, Error: %v", payment.CorrelationID, err)
-		return fmt.Errorf("erro ao enfileirar pagamento: %w", err)
+		return fmt.Errorf("could not enqueue service: %w", err)
 	}
 
 	log.Printf("Payment enqueued: %s", payment.CorrelationID)
@@ -70,7 +70,7 @@ func (s *paymentService) RetrievePaymentSummary(from, to string) (*model.Payment
 	} else {
 		fromTime, err = time.Parse(time.RFC3339, from)
 		if err != nil {
-			return nil, fmt.Errorf("formato inválido para 'from': %w", err)
+			return nil, fmt.Errorf("invalid format to 'from': %w", err)
 		}
 	}
 
@@ -79,7 +79,7 @@ func (s *paymentService) RetrievePaymentSummary(from, to string) (*model.Payment
 	} else {
 		toTime, err = time.Parse(time.RFC3339, to)
 		if err != nil {
-			return nil, fmt.Errorf("formato inválido para 'from': %w", err)
+			return nil, fmt.Errorf("invalid format to 'from': %w", err)
 		}
 	}
 

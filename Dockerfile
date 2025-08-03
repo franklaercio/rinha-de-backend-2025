@@ -1,8 +1,4 @@
-FROM golang:1.24-alpine AS builder
-
-ENV CGO_ENABLED=0
-
-RUN apk add --no-cache git
+FROM golang:1.24-alpine AS build
 
 WORKDIR /app
 
@@ -11,12 +7,16 @@ RUN go mod download
 
 COPY . .
 
-RUN go build -ldflags="-w -s" -o /bin/app ./cmd/api
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /main ./cmd/api
 
-FROM scratch
+FROM alpine:3.19
 
-COPY --from=builder /bin/app /app
+WORKDIR /
+
+COPY --from=build /main /main
 
 EXPOSE 8080
 
-ENTRYPOINT ["/app"]
+USER nobody:nogroup
+
+ENTRYPOINT ["/main"] 

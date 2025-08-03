@@ -44,6 +44,8 @@ func NewPostgresRepository(ctx context.Context, dsn string, maxConnections int) 
 		return nil, fmt.Errorf("could not ping postgres: %w", err)
 	}
 
+	log.Printf("[INFO] Successfully connected to Postgres.")
+
 	return &PostgresRepository{pool: pool}, nil
 }
 

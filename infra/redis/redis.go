@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -24,7 +25,7 @@ func NewRedisClient(host, port, password string) (RedisClient, error) {
 		return nil, fmt.Errorf("could not connect to redis: %w", err)
 	}
 
-	fmt.Println("Connected to Redis")
+	log.Printf("[INFO] Successfully connected to Redis.")
 	return &client{rdb: rdb}, nil
 }
 

@@ -79,7 +79,7 @@ func (c *client) SendPayment(payment model.Payment, origin model.PaymentProcesso
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("erro ao serializar JSON: %w", err)
+		return fmt.Errorf("could not serialize JSON: %w", err)
 	}
 
 	url := c.resolveURL(origin)
@@ -91,7 +91,7 @@ func (c *client) SendPayment(payment model.Payment, origin model.PaymentProcesso
 	_, err = cb.Execute(func() (interface{}, error) {
 		req, err := http.NewRequestWithContext(context.Background(), "POST", url+"/payments", bytes.NewBuffer(body))
 		if err != nil {
-			return nil, fmt.Errorf("erro ao criar requisição: %w", err)
+			return nil, fmt.Errorf("could not create request: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
 
@@ -100,13 +100,13 @@ func (c *client) SendPayment(payment model.Payment, origin model.PaymentProcesso
 			if err == context.Canceled || err == context.DeadlineExceeded {
 				return nil, err
 			}
-			return nil, fmt.Errorf("erro na requisição para API externa: %w", err)
+			return nil, fmt.Errorf("could not send request to API: %w", err)
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode >= 300 {
 			respBody, _ := io.ReadAll(resp.Body)
-			return nil, fmt.Errorf("erro na API externa: status %d, corpo: %s", resp.StatusCode, respBody)
+			return nil, fmt.Errorf("could not proccess in external API: status %d, body: %s", resp.StatusCode, respBody)
 		}
 
 		return nil, nil
@@ -114,17 +114,17 @@ func (c *client) SendPayment(payment model.Payment, origin model.PaymentProcesso
 
 	if err != nil {
 		if err == gobreaker.ErrOpenState {
-			log.Printf("[Circuit Breaker] A API %s está em estado OPEN. Não enviando pagamento %s.", origin, payment.CorrelationID)
-			return fmt.Errorf("circuit breaker para %s está aberto", origin)
+			log.Printf("[Circuit Breaker] API %s is OPEN. We not send payment %s.", origin, payment.CorrelationID)
+			return fmt.Errorf("circuit breaker for API %s is open", origin)
 		}
 		return err
 	}
 
 	if _, err := c.DB.SavePayment(payment, origin); err != nil {
-		log.Printf("[ERROR] Falha ao salvar o pagamento localmente para CorrelationID '%s' antes de enviar para a API externa: %v", payment.CorrelationID, err)
+		log.Printf("[ERROR] Could not save in database with CorrelationID '%s' external API: %v", payment.CorrelationID, err)
 	}
 
-	log.Printf("[INFO] Pagamento salvo com sucesso no %s: %s at %s", url, payment.CorrelationID, payment.RequestedAt)
+	log.Printf("[INFO] Payment saved in database with CorrelationID '%s' external API: %s at %s", payment.CorrelationID, url, payment.RequestedAt)
 
 	return nil
 }
@@ -134,12 +134,12 @@ func (c *client) getHealthCheck(origin model.PaymentProcessor) error {
 
 	req, err := http.NewRequest("GET", url+"/payments/service-health", nil)
 	if err != nil {
-		return fmt.Errorf("erro ao criar requisição: %w", err)
+		return fmt.Errorf("could not create request: %w", err)
 	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("erro na requisição: %w", err)
+		return fmt.Errorf("could not send request to API: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -150,16 +150,16 @@ func (c *client) getHealthCheck(origin model.PaymentProcessor) error {
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("erro ao ler resposta: %w", err)
+		return fmt.Errorf("could not read response: %w", err)
 	}
 
 	var health HealthCheck
 	if err := json.Unmarshal(respBody, &health); err != nil {
-		return fmt.Errorf("erro ao decodificar resposta: %w", err)
+		return fmt.Errorf("could not parse JSON: %w", err)
 	}
 
 	if health.Failing {
-		return fmt.Errorf("API %s está fora do ar", url)
+		return fmt.Errorf("API %s is failing", url)
 	}
 
 	return nil

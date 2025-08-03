@@ -1,10 +1,12 @@
 services:
   postgres:
-    image: postgres:15-alpine
+    image: postgres:17-alpine
     hostname: postgres
     command: postgres -c max_connections=450 -c shared_buffers=40MB -c effective_cache_size=120MB -c work_mem=4MB -c maintenance_work_mem=16MB -c synchronous_commit=off -c fsync=off
     container_name: db
     restart: unless-stopped
+    ports:
+      - "5432:5432"
     networks:
       - backend
     environment:
@@ -30,6 +32,8 @@ services:
     hostname: redis
     container_name: redis
     restart: unless-stopped
+    ports:
+      - "6379:6379"
     networks:
       - backend
     volumes:
@@ -51,7 +55,7 @@ services:
     networks:
       - backend
     ports:
-      - "9999:80"
+      - "9999:9999"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
@@ -63,12 +67,14 @@ services:
           cpus: "0.2"
           memory: "20MB"
 
-  api1: &api1
+  api1:
     container_name: api1
     build:
       context: .
       dockerfile: Dockerfile
     hostname: api1
+    ports:
+      - "8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -100,9 +106,42 @@ services:
           memory: "50M"
 
   api2:
-    <<: *api1
     container_name: api2
+    build:
+      context: .
+      dockerfile: Dockerfile
     hostname: api2
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+      - payment-processor
+    environment:
+      DB_HOST: postgres
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: rinha
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      HTTP_PORT: "8081"
+      PAYMENT_WORKERS: "40"
+      PAYMENT_URL_DEFAULT: "http://payment-processor-default:8080"
+      PAYMENT_URL_FALLBACK: "http://payment-processor-fallback:8080"
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 2s
+        max_attempts: 10
+        window: 5s
+      resources:
+        limits:
+          cpus: "0.3"
+          memory: "50M"
 
 volumes:
   postgres_data:
