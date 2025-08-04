@@ -38,6 +38,8 @@ func (h *Handler) SendPayment(w http.ResponseWriter, r *http.Request) {
 		RequestedAt:   time.Now().UTC(),
 	}
 
+	log.Printf("[INFO] Send payment to proccess: %s, Amount: %f", input.CorrelationID, input.Amount)
+
 	if err := h.paymentService.CreatePayment(input); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
